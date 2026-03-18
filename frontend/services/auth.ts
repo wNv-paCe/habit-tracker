@@ -20,6 +20,7 @@ export const login = async (username: string, password: string) => {
 
   // Save Token to local
   await AsyncStorage.setItem("access_token", access);
+  console.log("Token saved:", access);
   await AsyncStorage.setItem("refresh_token", refresh);
 
   return response.data;

@@ -27,10 +27,15 @@ class CheckInViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return CheckIn.objects.filter(
+        queryset = CheckIn.objects.filter(
             habit__user=self.request.user,
             is_cancelled=False
         )
+        # Filter by date
+        date = self.request.query_params.get('checked_at')
+        if date:
+            queryset = queryset.filter(checked_at__date=date)
+        return queryset
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
