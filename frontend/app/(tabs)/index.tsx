@@ -8,9 +8,11 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
 import { useEffect, useState } from "react";
+
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Modal,
   Platform,
@@ -21,6 +23,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+// ========== 调试模式 ==========
+// 设置为 0: 正常模式
+// 设置为 1: 模拟明天（验证 DAILY 重置）
+// 设置为 7: 模拟一周后（验证 WEEKLY 重置）
+// 设置为 30: 模拟一个月后（验证 MONTHLY 重置）
+const DEBUG_OFFSET_DAYS = 0;
+// ==============================
+
 type Habit = {
   id: number;
   name: string;
@@ -29,6 +39,7 @@ type Habit = {
   start_date: string;
   end_date: string;
   last_checkin?: string | null;
+  checkins: any[];
 };
 
 export default function HomeScreen() {
@@ -48,6 +59,16 @@ export default function HomeScreen() {
 
   useEffect(() => {
     fetchAll();
+  }, []);
+
+  // 监听应用切换到前台时刷新
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      if (nextAppState === "active") {
+        fetchAll();
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   const fetchAll = async () => {
@@ -108,17 +129,32 @@ export default function HomeScreen() {
         });
         setHabits((prev) =>
           prev.map((h) =>
-            h.id === habitId ? { ...h, last_checkin: null } : h,
+            h.id === habitId
+              ? {
+                  ...h,
+                  last_checkin: null,
+                  checkins: h.checkins.filter((c: any) => c.id !== checkinId),
+                }
+              : h,
           ),
         );
       } else {
         // Not check in -> Check in
         const newCheckIn = await createCheckIn(habitId);
-        setCheckinMap((prev) => new Map(prev).set(habitId, newCheckIn.id));
+        // 确保 is_cancelled 字段存在（后端默认为 false）
+        const checkInWithFlag = {
+          ...newCheckIn,
+          is_cancelled: newCheckIn.is_cancelled ?? false,
+        };
+        setCheckinMap((prev) => new Map(prev).set(habitId, checkInWithFlag.id));
         setHabits((prev) =>
           prev.map((h) =>
             h.id === habitId
-              ? { ...h, last_checkin: newCheckIn.checked_at }
+              ? {
+                  ...h,
+                  last_checkin: checkInWithFlag.checked_at,
+                  checkins: [...h.checkins, checkInWithFlag],
+                }
               : h,
           ),
         );
@@ -149,7 +185,7 @@ export default function HomeScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-white items-center justify-center">
+      <View className="flex-1 bg-gray-900 items-center justify-center">
         <ActivityIndicator size="large" color="#3b82f6" />
       </View>
     );
@@ -189,47 +225,66 @@ export default function HomeScreen() {
           data={habits}
           keyExtractor={(item) => item.id.toString()}
           renderItem={({ item }) => {
-            let done = false;
+            // 调试模式：模拟不同日期
             const today = new Date();
+            today.setDate(today.getDate() + DEBUG_OFFSET_DAYS);
+            today.setHours(0, 0, 0, 0);
 
-            if (item.last_checkin) {
-              const lastCheckinDate = new Date(item.last_checkin!);
+            let done = false;
 
-              if (item.frequency === "DAILY") {
-                done = lastCheckinDate.toDateString() === today.toDateString();
-              } else if (item.frequency == "WEEKLY") {
-                // Monday is the first day
-                const day = today.getDay() || 7; // Sunday 0->7
-                const startOfWeek = new Date(today);
-                startOfWeek.setDate(today.getDate() - day + 1); // Monday
-                startOfWeek.setHours(0, 0, 0, 0);
+            if (item.frequency === "DAILY") {
+              // 检查是否有今天的打卡记录（排除已取消的）
+              done = item.checkins.some((c: any) => {
+                const checkinDate = new Date(c.checked_at);
+                checkinDate.setHours(0, 0, 0, 0);
+                return (
+                  !c.is_cancelled && checkinDate.getTime() === today.getTime()
+                );
+              });
+            } else if (item.frequency === "WEEKLY") {
+              // 检查本周是否有打卡记录（周一到周日，排除已取消的）
+              const day = today.getDay() || 7; // Sunday 0->7
+              const startOfWeek = new Date(today);
+              startOfWeek.setDate(today.getDate() - day + 1);
+              startOfWeek.setHours(0, 0, 0, 0);
 
-                const endOfWeek = new Date(startOfWeek);
-                endOfWeek.setDate(startOfWeek.getDate() + 6);
-                endOfWeek.setHours(23, 59, 59, 999);
-                done =
-                  lastCheckinDate >= startOfWeek &&
-                  lastCheckinDate <= endOfWeek;
-              } else if (item.frequency === "MONTHLY") {
-                const startOfMonth = new Date(
-                  today.getFullYear(),
-                  today.getMonth(),
-                  1,
+              const endOfWeek = new Date(startOfWeek);
+              endOfWeek.setDate(startOfWeek.getDate() + 6);
+              endOfWeek.setHours(23, 59, 59, 999);
+
+              done = item.checkins.some((c: any) => {
+                const checkinDate = new Date(c.checked_at);
+                return (
+                  !c.is_cancelled &&
+                  checkinDate >= startOfWeek &&
+                  checkinDate <= endOfWeek
                 );
-                const endOfMonth = new Date(
-                  today.getFullYear(),
-                  today.getMonth() + 1,
-                  0,
+              });
+            } else if (item.frequency === "MONTHLY") {
+              // 检查本月是否有打卡记录（排除已取消的）
+              const startOfMonth = new Date(
+                today.getFullYear(),
+                today.getMonth(),
+                1,
+              );
+              const endOfMonth = new Date(
+                today.getFullYear(),
+                today.getMonth() + 1,
+                0,
+                23,
+                59,
+                59,
+                999,
+              );
+
+              done = item.checkins.some((c: any) => {
+                const checkinDate = new Date(c.checked_at);
+                return (
+                  !c.is_cancelled &&
+                  checkinDate >= startOfMonth &&
+                  checkinDate <= endOfMonth
                 );
-                const lastCheckinDateOnly = new Date(
-                  lastCheckinDate.getFullYear(),
-                  lastCheckinDate.getMonth(),
-                  lastCheckinDate.getDate(),
-                );
-                done =
-                  lastCheckinDateOnly >= startOfMonth &&
-                  lastCheckinDateOnly <= endOfMonth;
-              }
+              });
             }
 
             return (
