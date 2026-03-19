@@ -1,22 +1,22 @@
-import { BarChart } from "react-native-chart-kit";
-import { Dimensions } from "react-native";
-import { getHabits } from "@/services/habits";
 import { getCheckInsByDateRange } from "@/services/checkins";
+import { getHabits } from "@/services/habits";
 import {
-  calculateCurrentStreak,
   calculateBestStreak,
   calculateCompletionRate,
+  calculateCurrentStreak,
   getDailyCheckInCounts,
 } from "@/utils/stats";
-import { useEffect, useState, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
+  Dimensions,
+  ScrollView,
   Text,
   View,
-  ScrollView,
-  ActivityIndicator,
 } from "react-native";
+import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -33,7 +33,7 @@ export default function StatsScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchData();
-    }, [])
+    }, []),
   );
 
   const fetchData = async () => {
@@ -45,23 +45,26 @@ export default function StatsScreen() {
       // 使用本地日期字符串格式 YYYY-MM-DD，避免时区问题
       const formatDate = (date: Date) => {
         const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
 
       const [habitsData, checkinsData] = await Promise.all([
         getHabits(),
-        getCheckInsByDateRange(
-          formatDate(startDate),
-          formatDate(endDate)
-        ),
+        getCheckInsByDateRange(formatDate(startDate), formatDate(endDate)),
       ]);
 
       const activeHabits = habitsData.filter((h: any) => h.is_active);
       console.log("=== Stats Debug ===");
-      console.log("Active habits:", activeHabits.map((h: any) => ({ id: h.id, name: h.name })));
-      console.log("Check-ins:", checkinsData.map((c: any) => ({ habit: c.habit, date: c.checked_at })));
+      console.log(
+        "Active habits:",
+        activeHabits.map((h: any) => ({ id: h.id, name: h.name })),
+      );
+      console.log(
+        "Check-ins:",
+        checkinsData.map((c: any) => ({ habit: c.habit, date: c.checked_at })),
+      );
       console.log("==================");
 
       setHabits(activeHabits);
@@ -91,7 +94,7 @@ export default function StatsScreen() {
   const dailyCounts = getDailyCheckInCounts(
     checkins,
     chartStartDate,
-    chartEndDate
+    chartEndDate,
   );
   const labels = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(chartStartDate);
@@ -102,17 +105,6 @@ export default function StatsScreen() {
   const chartData = {
     labels,
     datasets: [{ data: dailyCounts }],
-  };
-
-  // 调整图表样式，使其居中
-  const chartConfig = {
-    backgroundColor: "#ffffff",
-    backgroundGradientFrom: "#ffffff",
-    backgroundGradientTo: "#ffffff",
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
-    barPercentage: 0.6, // 增加柱子宽度
-    paddingRight: 20, // 增加右边距
   };
 
   return (
@@ -151,16 +143,17 @@ export default function StatsScreen() {
             height={200}
             yAxisLabel=""
             yAxisSuffix=""
+            withInnerLines={false}
             chartConfig={{
               backgroundColor: "#ffffff",
               backgroundGradientFrom: "#ffffff",
               backgroundGradientTo: "#ffffff",
               decimalPlaces: 0,
               color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+              labelColor: (opacity = 1) => `rgba(107, 114, 128, ${opacity})`,
               barPercentage: 0.6, // 增加柱子宽度
-              paddingRight: 20, // 增加右边距
             }}
-            style={{ borderRadius: 8 }}
+            style={{ borderRadius: 8, marginLeft: -14 }}
           />
         </View>
 
@@ -179,7 +172,7 @@ export default function StatsScreen() {
                 habit,
                 checkins,
                 new Date(habit.start_date), // 使用习惯的 start_date
-                new Date()
+                new Date(),
               );
               return (
                 <View
