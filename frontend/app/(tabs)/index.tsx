@@ -2,6 +2,7 @@ import {
   cancelCheckIn,
   createCheckIn,
   getTodayCheckIns,
+  toLocalDateString,
 } from "@/services/checkins";
 import { createHabit, deleteHabit, getHabits } from "@/services/habits";
 import DateTimePicker, {
@@ -22,14 +23,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-// ========== 调试模式 ==========
-// 设置为 0: 正常模式
-// 设置为 1: 模拟明天（验证 DAILY 重置）
-// 设置为 7: 模拟一周后（验证 WEEKLY 重置）
-// 设置为 30: 模拟一个月后（验证 MONTHLY 重置）
-const DEBUG_OFFSET_DAYS = 0;
-// ==============================
 
 type Habit = {
   id: number;
@@ -57,6 +50,14 @@ export default function HomeScreen() {
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
 
+  // CheckIn Modal states
+  const [checkInModalVisible, setCheckInModalVisible] = useState(false);
+  const [selectedHabitId, setSelectedHabitId] = useState<number | null>(null);
+  const [checkInMood, setCheckInMood] = useState<
+    "GREAT" | "GOOD" | "NEUTRAL" | "BAD"
+  >("GOOD");
+  const [checkInNote, setCheckInNote] = useState("");
+
   useEffect(() => {
     fetchAll();
   }, []);
@@ -71,6 +72,27 @@ export default function HomeScreen() {
     return () => subscription.remove();
   }, []);
 
+  const isInCurrentPeriod = (dateStr: string, frequency: string): boolean => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+    if (frequency === "DAILY") {
+      return dateStr === todayStr;
+    } else if (frequency === "WEEKLY") {
+      const day = today.getDay() || 7;
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - day + 1);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      const monStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+      const sunStr = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
+      return dateStr >= monStr && dateStr <= sunStr;
+    } else if (frequency === "MONTHLY") {
+      return dateStr.substring(0, 7) === todayStr.substring(0, 7); // 同年同月
+    }
+    return false;
+  };
+
   const fetchAll = async () => {
     try {
       const [habitsData, checkinsData] = await Promise.all([
@@ -79,8 +101,27 @@ export default function HomeScreen() {
       ]);
       setHabits(habitsData);
       // Have already checkin habit id
+      const activeHabitIds = new Set(habitsData.map((h: any) => h.id));
       const map = new Map<number, number>();
-      checkinsData.forEach((c: any) => map.set(c.habit, c.id));
+
+      habitsData.forEach((habit: any) => {
+        if (!activeHabitIds.has(habit.id)) return;
+        // Base on frequency to check if check in
+        const done = habit.checkins?.some((c: any) => {
+          if (c.is_cancelled) return false;
+          const cdStr = c.checked_at.substring(0, 10);
+          return isInCurrentPeriod(cdStr, habit.frequency);
+        });
+        if (done) {
+          // checkinMap saves the newest check in id
+          const latest = habit.checkins
+            ?.filter((c: any) => !c.is_cancelled)
+            .sort((a: any, b: any) =>
+              b.checked_at.localeCompare(a.checked_at),
+            )[0];
+          if (latest) map.set(habit.id, latest.id);
+        }
+      });
       setCheckinMap(map);
     } catch (error) {
       console.log("Failed to fetch habits:", error);
@@ -100,8 +141,8 @@ export default function HomeScreen() {
         name,
         description,
         frequency,
-        start_date: startDate.toISOString().split("T")[0],
-        end_date: endDate ? endDate.toISOString().split("T")[0] : undefined,
+        start_date: toLocalDateString(startDate),
+        end_date: endDate ? toLocalDateString(endDate) : undefined,
       });
       setModalVisible(false);
       setName("");
@@ -117,10 +158,10 @@ export default function HomeScreen() {
 
   // Check in
   const handleCheckIn = async (habitId: number) => {
-    try {
-      if (checkinMap.has(habitId)) {
-        // Already check in -> Cancel
-        const checkinId = checkinMap.get(habitId)!;
+    // Already check in -> Cancel
+    if (checkinMap.has(habitId)) {
+      const checkinId = checkinMap.get(habitId)!;
+      try {
         await cancelCheckIn(checkinId);
         setCheckinMap((prev) => {
           const next = new Map(prev);
@@ -138,29 +179,48 @@ export default function HomeScreen() {
               : h,
           ),
         );
-      } else {
-        // Not check in -> Check in
-        const newCheckIn = await createCheckIn(habitId);
-        // 确保 is_cancelled 字段存在（后端默认为 false）
-        const checkInWithFlag = {
-          ...newCheckIn,
-          is_cancelled: newCheckIn.is_cancelled ?? false,
-        };
-        setCheckinMap((prev) => new Map(prev).set(habitId, checkInWithFlag.id));
-        setHabits((prev) =>
-          prev.map((h) =>
-            h.id === habitId
-              ? {
-                  ...h,
-                  last_checkin: checkInWithFlag.checked_at,
-                  checkins: [...h.checkins, checkInWithFlag],
-                }
-              : h,
-          ),
-        );
+      } catch (error) {
+        Alert.alert("Error", "Failed to cancel check-in");
       }
+    } else {
+      // Not check in -> Open Modal
+      setSelectedHabitId(habitId);
+      setCheckInMood("GOOD");
+      setCheckInNote("");
+      setCheckInModalVisible(true);
+    }
+  };
+
+  const handleConfirmCheckIn = async () => {
+    if (selectedHabitId === null) return;
+
+    try {
+      const newCheckIn = await createCheckIn(
+        selectedHabitId,
+        checkInMood || undefined,
+        checkInNote || undefined,
+      );
+      const checkInWithFlag = {
+        ...newCheckIn,
+        is_cancelled: newCheckIn.is_cancelled ?? false,
+      };
+      setCheckinMap((prev) =>
+        new Map(prev).set(selectedHabitId, checkInWithFlag.id),
+      );
+      setHabits((prev) =>
+        prev.map((h) =>
+          h.id === selectedHabitId
+            ? {
+                ...h,
+                last_checkin: checkInWithFlag.checked_at,
+                checkins: [...h.checkins, checkInWithFlag],
+              }
+            : h,
+        ),
+      );
+      setCheckInModalVisible(false);
     } catch (error) {
-      Alert.alert("Error", "Failed to update check-in");
+      Alert.alert("Error", "Failed to check in");
     }
   };
 
@@ -175,6 +235,11 @@ export default function HomeScreen() {
           try {
             await deleteHabit(habitId);
             setHabits((prev) => prev.filter((h) => h.id !== habitId));
+            setCheckinMap((prev) => {
+              const next = new Map(prev);
+              next.delete(habitId);
+              return next;
+            });
           } catch (error) {
             Alert.alert("Error", "Failed to delete habit");
           }
@@ -225,67 +290,7 @@ export default function HomeScreen() {
           data={habits}
           keyExtractor={(item) => item.id.toString()}
           renderItem={({ item }) => {
-            // 调试模式：模拟不同日期
-            const today = new Date();
-            today.setDate(today.getDate() + DEBUG_OFFSET_DAYS);
-            today.setHours(0, 0, 0, 0);
-
-            let done = false;
-
-            if (item.frequency === "DAILY") {
-              // 检查是否有今天的打卡记录（排除已取消的）
-              done = item.checkins.some((c: any) => {
-                const checkinDate = new Date(c.checked_at);
-                checkinDate.setHours(0, 0, 0, 0);
-                return (
-                  !c.is_cancelled && checkinDate.getTime() === today.getTime()
-                );
-              });
-            } else if (item.frequency === "WEEKLY") {
-              // 检查本周是否有打卡记录（周一到周日，排除已取消的）
-              const day = today.getDay() || 7; // Sunday 0->7
-              const startOfWeek = new Date(today);
-              startOfWeek.setDate(today.getDate() - day + 1);
-              startOfWeek.setHours(0, 0, 0, 0);
-
-              const endOfWeek = new Date(startOfWeek);
-              endOfWeek.setDate(startOfWeek.getDate() + 6);
-              endOfWeek.setHours(23, 59, 59, 999);
-
-              done = item.checkins.some((c: any) => {
-                const checkinDate = new Date(c.checked_at);
-                return (
-                  !c.is_cancelled &&
-                  checkinDate >= startOfWeek &&
-                  checkinDate <= endOfWeek
-                );
-              });
-            } else if (item.frequency === "MONTHLY") {
-              // 检查本月是否有打卡记录（排除已取消的）
-              const startOfMonth = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                1,
-              );
-              const endOfMonth = new Date(
-                today.getFullYear(),
-                today.getMonth() + 1,
-                0,
-                23,
-                59,
-                59,
-                999,
-              );
-
-              done = item.checkins.some((c: any) => {
-                const checkinDate = new Date(c.checked_at);
-                return (
-                  !c.is_cancelled &&
-                  checkinDate >= startOfMonth &&
-                  checkinDate <= endOfMonth
-                );
-              });
-            }
+            const done = checkinMap.has(item.id);
 
             return (
               <View
@@ -371,7 +376,7 @@ export default function HomeScreen() {
                 setShowEndPicker(false);
               }}
             >
-              <Text>Start Date: {startDate.toISOString().split("T")[0]}</Text>
+              <Text>Start Date: {toLocalDateString(startDate)}</Text>
             </TouchableOpacity>
 
             {showStartPicker && Platform.OS === "ios" && (
@@ -443,8 +448,7 @@ export default function HomeScreen() {
               }}
             >
               <Text>
-                End Date:{" "}
-                {endDate ? endDate.toISOString().split("T")[0] : "Indefinite"}
+                End Date: {endDate ? toLocalDateString(endDate) : "Indefinite"}
               </Text>
             </TouchableOpacity>
 
@@ -523,6 +527,65 @@ export default function HomeScreen() {
             <TouchableOpacity
               className="mb-6"
               onPress={() => setModalVisible(false)}
+            >
+              <Text className="text-center text-gray-400">Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* CheckIn Modal */}
+      <Modal visible={checkInModalVisible} animationType="slide" transparent>
+        <View className="flex-1 justify-end bg-black/40">
+          <View className="bg-white rounded-t-3xl px-6 pt-6 pb-10">
+            <Text className="text-xl font-bold text-gray-800 mb-6">
+              Check In
+            </Text>
+
+            <Text className="text-sm text-gray-600 mb-3">
+              How are you feeling?
+            </Text>
+            <View className="flex-row gap-2 mb-6">
+              {(["GREAT", "GOOD", "NEUTRAL", "BAD"] as const).map((m) => (
+                <TouchableOpacity
+                  key={m}
+                  className="flex-1 py-3 rounded-xl items-center"
+                  style={{
+                    backgroundColor: checkInMood === m ? "#3b82f6" : "#f3f4f6",
+                  }}
+                  onPress={() => setCheckInMood(m)}
+                >
+                  <Text
+                    style={{ color: checkInMood === m ? "white" : "#6b7280" }}
+                  >
+                    {m}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text className="text-sm text-gray-600 mb-3">Note (optional)</Text>
+            <TextInput
+              className="border border-gray-300 rounded-xl px-4 py-3 mb-6 text-base min-h-[100px]"
+              placeholder="Add a note about your check-in..."
+              value={checkInNote}
+              onChangeText={setCheckInNote}
+              multiline
+              textAlignVertical="top"
+            />
+
+            <TouchableOpacity
+              className="bg-blue-500 rounded-xl py-4 items-center mb-3"
+              onPress={handleConfirmCheckIn}
+            >
+              <Text className="text-white font-bold text-base">
+                Confirm Check In
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              className="mb-3"
+              onPress={() => setCheckInModalVisible(false)}
             >
               <Text className="text-center text-gray-400">Cancel</Text>
             </TouchableOpacity>

@@ -31,10 +31,17 @@ class CheckInViewSet(viewsets.ModelViewSet):
             habit__user=self.request.user,
             is_cancelled=False
         )
-        # Filter by date
+        # Filter by single date
         date = self.request.query_params.get('checked_at')
         if date:
             queryset = queryset.filter(checked_at__date=date)
+        # Filter by date range
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date:
+            queryset = queryset.filter(checked_at__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(checked_at__date__lte=end_date)
         return queryset
     
     @action(detail=True, methods=['post'])
