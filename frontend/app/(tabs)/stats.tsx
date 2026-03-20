@@ -107,6 +107,10 @@ export default function StatsScreen() {
     datasets: [{ data: dailyCounts }],
   };
 
+  console.log("dailyCounts", dailyCounts);
+  const maxValue = Math.max(...dailyCounts, 1);
+  const segments = Math.min(maxValue, 5);
+
   return (
     <SafeAreaView className="flex-1 bg-white">
       <ScrollView className="flex-1 px-6">
@@ -139,6 +143,8 @@ export default function StatsScreen() {
           </Text>
           <BarChart
             data={chartData}
+            fromZero
+            segments={segments}
             width={screenWidth - 72}
             height={200}
             yAxisLabel=""
@@ -152,6 +158,7 @@ export default function StatsScreen() {
               color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
               labelColor: (opacity = 1) => `rgba(107, 114, 128, ${opacity})`,
               barPercentage: 0.6, // 增加柱子宽度
+              formatYLabel: (value: string) => Math.round(Number(value)).toString(),
             }}
             style={{ borderRadius: 8, marginLeft: -14 }}
           />
